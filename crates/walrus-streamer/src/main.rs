@@ -1954,3 +1954,356 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use byteorder::WriteBytesExt;
+    use std::io::Write;
+
+    fn create_test_index_bytes(entries: &[(u64, u64, u64)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for (checkpoint, offset, length) in entries {
+            let name = checkpoint.to_string();
+            buf.write_u32::<LittleEndian>(name.len() as u32).unwrap();
+            buf.write_all(name.as_bytes()).unwrap();
+            buf.write_u64::<LittleEndian>(*offset).unwrap();
+            buf.write_u64::<LittleEndian>(*length).unwrap();
+            buf.write_u32::<LittleEndian>(0).unwrap(); // CRC placeholder
+        }
+        buf
+    }
+
+    #[test]
+    fn test_parse_index_bytes() {
+        let entries = vec![
+            (1000u64, 0u64, 1024u64),
+            (1001u64, 1024u64, 2048u64),
+            (1002u64, 3072u64, 512u64),
+        ];
+        let index_bytes = create_test_index_bytes(&entries);
+        let index = parse_index_bytes(&index_bytes, 3).unwrap();
+
+        assert_eq!(index.len(), 3);
+        assert_eq!(index.get(&1000).unwrap().offset, 0);
+        assert_eq!(index.get(&1000).unwrap().length, 1024);
+        assert_eq!(index.get(&1001).unwrap().offset, 1024);
+        assert_eq!(index.get(&1002).unwrap().length, 512);
+    }
+
+    #[test]
+    fn test_parse_index_bytes_empty() {
+        let index = parse_index_bytes(&[], 0).unwrap();
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn test_coalesce_entries_empty() {
+        let entries: Vec<(u64, BlobIndexEntry)> = vec![];
+        let ranges = coalesce_entries(&entries, 0, u64::MAX);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_coalesce_entries_single() {
+        let entries = vec![(
+            1000u64,
+            BlobIndexEntry {
+                checkpoint_number: 1000,
+                offset: 0,
+                length: 1024,
+            },
+        )];
+        let ranges = coalesce_entries(&entries, 0, u64::MAX);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, 1024);
+        assert_eq!(ranges[0].entries.len(), 1);
+    }
+
+    #[test]
+    fn test_coalesce_entries_contiguous() {
+        let entries = vec![
+            (
+                1000u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1000,
+                    offset: 0,
+                    length: 1024,
+                },
+            ),
+            (
+                1001u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1001,
+                    offset: 1024,
+                    length: 1024,
+                },
+            ),
+        ];
+        let ranges = coalesce_entries(&entries, 0, u64::MAX);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, 2048);
+        assert_eq!(ranges[0].entries.len(), 2);
+    }
+
+    #[test]
+    fn test_coalesce_entries_with_gap() {
+        let entries = vec![
+            (
+                1000u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1000,
+                    offset: 0,
+                    length: 1024,
+                },
+            ),
+            (
+                1001u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1001,
+                    offset: 2048, // Gap of 1024 bytes
+                    length: 1024,
+                },
+            ),
+        ];
+
+        // With gap tolerance of 0, should create 2 ranges
+        let ranges = coalesce_entries(&entries, 0, u64::MAX);
+        assert_eq!(ranges.len(), 2);
+
+        // With gap tolerance of 1024, should coalesce into 1 range
+        let ranges = coalesce_entries(&entries, 1024, u64::MAX);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, 3072);
+    }
+
+    #[test]
+    fn test_coalesce_entries_max_range_size() {
+        let entries = vec![
+            (
+                1000u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1000,
+                    offset: 0,
+                    length: 1024,
+                },
+            ),
+            (
+                1001u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1001,
+                    offset: 1024,
+                    length: 1024,
+                },
+            ),
+            (
+                1002u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1002,
+                    offset: 2048,
+                    length: 1024,
+                },
+            ),
+        ];
+
+        // With max range size of 2048, should create 2 ranges
+        let ranges = coalesce_entries(&entries, 0, 2048);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].entries.len(), 2);
+        assert_eq!(ranges[1].entries.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_entries() {
+        let mut index = HashMap::new();
+        for i in 1000..1010 {
+            index.insert(
+                i,
+                BlobIndexEntry {
+                    checkpoint_number: i,
+                    offset: (i - 1000) * 1024,
+                    length: 1024,
+                },
+            );
+        }
+
+        let filtered = filter_entries(&index, 1003, 1007);
+        assert_eq!(filtered.len(), 4); // 1003, 1004, 1005, 1006
+    }
+
+    #[test]
+    fn test_chunk_entries() {
+        let entries: Vec<(u64, BlobIndexEntry)> = (0..100)
+            .map(|i| {
+                (
+                    1000 + i,
+                    BlobIndexEntry {
+                        checkpoint_number: 1000 + i,
+                        offset: i * 1000,
+                        length: 1000,
+                    },
+                )
+            })
+            .collect();
+
+        let total_size = 100_000;
+        let ranges = chunk_entries(&entries, total_size, 4, false);
+
+        assert_eq!(ranges.len(), 4);
+        // Each chunk should have roughly 25 entries
+        for range in &ranges {
+            assert!(range.entries.len() >= 20 && range.entries.len() <= 30);
+        }
+    }
+
+    #[test]
+    fn test_build_raw_ranges() {
+        let ranges = build_raw_ranges(1000, 4);
+        assert_eq!(ranges.len(), 4);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, 250);
+        assert_eq!(ranges[3].start, 750);
+        assert_eq!(ranges[3].end, 1000);
+    }
+
+    #[test]
+    fn test_strip_ansi() {
+        let input = "\x1b[32mgreen text\x1b[0m normal";
+        let output = strip_ansi(input);
+        assert_eq!(output, "green text normal");
+    }
+
+    #[test]
+    fn test_strip_ansi_no_codes() {
+        let input = "plain text";
+        let output = strip_ansi(input);
+        assert_eq!(output, "plain text");
+    }
+
+    #[test]
+    fn test_parse_blob_size_from_stderr() {
+        let stderr = "some output blob_size=12345 more output";
+        let size = parse_blob_size_from_stderr(stderr);
+        assert_eq!(size, Some(12345));
+    }
+
+    #[test]
+    fn test_parse_blob_size_from_stderr_with_ansi() {
+        let stderr = "\x1b[32mblob_size=\x1b[0m99999";
+        let size = parse_blob_size_from_stderr(stderr);
+        assert_eq!(size, Some(99999));
+    }
+
+    #[test]
+    fn test_parse_blob_size_from_stderr_not_found() {
+        let stderr = "no size here";
+        let size = parse_blob_size_from_stderr(stderr);
+        assert_eq!(size, None);
+    }
+
+    #[test]
+    fn test_select_blobs_by_id() {
+        let blobs = vec![
+            BlobMetadata {
+                blob_id: "abc".to_string(),
+                start_checkpoint: 0,
+                end_checkpoint: 100,
+                entries_count: 100,
+                total_size: 1000,
+                end_of_epoch: false,
+                expiry_epoch: 0,
+            },
+            BlobMetadata {
+                blob_id: "def".to_string(),
+                start_checkpoint: 101,
+                end_checkpoint: 200,
+                entries_count: 100,
+                total_size: 1000,
+                end_of_epoch: false,
+                expiry_epoch: 0,
+            },
+        ];
+
+        let selected = select_blobs(&blobs, Some("def"), 1).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].blob_id, "def");
+    }
+
+    #[test]
+    fn test_select_blobs_by_count() {
+        let blobs = vec![
+            BlobMetadata {
+                blob_id: "oldest".to_string(),
+                start_checkpoint: 0,
+                end_checkpoint: 100,
+                entries_count: 100,
+                total_size: 1000,
+                end_of_epoch: false,
+                expiry_epoch: 0,
+            },
+            BlobMetadata {
+                blob_id: "middle".to_string(),
+                start_checkpoint: 101,
+                end_checkpoint: 200,
+                entries_count: 100,
+                total_size: 1000,
+                end_of_epoch: false,
+                expiry_epoch: 0,
+            },
+            BlobMetadata {
+                blob_id: "newest".to_string(),
+                start_checkpoint: 201,
+                end_checkpoint: 300,
+                entries_count: 100,
+                total_size: 1000,
+                end_of_epoch: false,
+                expiry_epoch: 0,
+            },
+        ];
+
+        let selected = select_blobs(&blobs, None, 2).unwrap();
+        assert_eq!(selected.len(), 2);
+        // Should be sorted by end_checkpoint descending
+        assert_eq!(selected[0].blob_id, "newest");
+        assert_eq!(selected[1].blob_id, "middle");
+    }
+
+    #[test]
+    fn test_build_single_window() {
+        let entries = vec![
+            (
+                1000u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1000,
+                    offset: 100,
+                    length: 50,
+                },
+            ),
+            (
+                1001u64,
+                BlobIndexEntry {
+                    checkpoint_number: 1001,
+                    offset: 500,
+                    length: 100,
+                },
+            ),
+        ];
+
+        let ranges = build_single_window(&entries).unwrap();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 100);
+        assert_eq!(ranges[0].end, 600);
+        assert_eq!(ranges[0].entries.len(), 2);
+    }
+
+    #[test]
+    fn test_estimate_index_buffer_bytes() {
+        // Should return reasonable buffer size for index
+        let size = estimate_index_buffer_bytes(1000);
+        assert!(size > 1000 * 20); // At least 20 bytes per entry
+        assert!(size < 1000 * 100); // Less than 100 bytes per entry
+    }
+}

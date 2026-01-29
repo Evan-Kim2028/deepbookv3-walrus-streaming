@@ -282,7 +282,7 @@ impl WalrusCheckpointStorage {
                 client: Client::builder()
                     .timeout(std::time::Duration::from_secs(http_timeout_secs))
                     .build()
-                    .expect("Failed to create HTTP client"),
+                    .context("failed to create HTTP client")?,
                 index_cache: RwLock::new(HashMap::new()),
                 blob_size_cache: RwLock::new(HashMap::new()),
                 bad_blobs: RwLock::new(HashSet::new()),

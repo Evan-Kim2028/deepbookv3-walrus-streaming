@@ -23,3 +23,16 @@ tx-data.txt
 example.ts
 /data
 /handoff
+
+# Runtime logs and state files
+*.log
+*.state
+*.out
+resume.json
+backfill_progress.*
+
+# Walrus binaries (too large for git)
+tools/walrus/*.tgz
+tools/walrus/walrus
+tools/walrus/walrus-node
+tools/walrus/walrus-upload-relay

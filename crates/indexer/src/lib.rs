@@ -213,7 +213,8 @@ impl DeepbookEnv {
             DeepbookEnv::Mainnet => MAINNET_REMOTE_STORE_URL,
             DeepbookEnv::Testnet => TESTNET_REMOTE_STORE_URL,
         };
-        Url::parse(url).unwrap()
+        // These are compile-time constants, so parsing cannot fail
+        Url::parse(url).expect("invalid hardcoded remote store URL")
     }
 
     /// Get all package addresses (DeepBook + Margin) for this environment
@@ -241,7 +242,7 @@ impl DeepbookEnv {
 
         self.get_all_package_strings()
             .iter()
-            .map(|pkg| ObjectID::from_str(pkg).unwrap())
+            .filter_map(|pkg| ObjectID::from_str(pkg).ok())
             .collect()
     }
 
@@ -251,7 +252,7 @@ impl DeepbookEnv {
 
         self.get_all_package_strings()
             .iter()
-            .map(|pkg| AccountAddress::from_str(pkg).unwrap())
+            .filter_map(|pkg| AccountAddress::from_str(pkg).ok())
             .collect()
     }
 }
