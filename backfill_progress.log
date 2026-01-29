@@ -1,0 +1,16 @@
+[2026-01-29T10:58:45-05:00] status: not running
+[2026-01-29T10:59:49-05:00] status: running pid=672639
+min_checkpoint=237277659 max_checkpoint=237283129 progress=2.35%
+
+[2026-01-29T11:03:47-05:00] status: running pid=672639
+min_checkpoint=237322669 max_checkpoint=237322669 progress=4.23%
+
+[2026-01-29T11:08:55-05:00] status: running pid=672639
+min_checkpoint=237453609 max_checkpoint=237453609 progress=9.70% cps~425.13
+
+[2026-01-29T11:15:53-05:00] status: running pid=672639
+min_checkpoint=237545837 max_checkpoint=237545837 progress=13.56%
+
+[2026-01-29T11:22:09-05:00] status: running pid=672639
+min_checkpoint=237685683 max_checkpoint=237685792 progress=19.41%
+

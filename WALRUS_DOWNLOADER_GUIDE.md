@@ -25,6 +25,13 @@ cargo run --release --bin deepbook-indexer -- \
 - `--walrus-cli-path <PATH>`: (Optional) Path to the `walrus` CLI binary. If provided, full blobs will be downloaded via storage nodes (avoiding aggregator timeouts) and cached locally.
 - `WALRUS_ARCHIVAL_URL`: (Optional Env Var) URL for the Walrus archival service.
 - `WALRUS_AGGREGATOR_URL`: (Optional Env Var) URL for the Walrus aggregator.
+- `WALRUS_CLI_BLOB_CONCURRENCY`: (Env Var) Max concurrent blobs when using CLI (default: 2).
+- `WALRUS_CLI_RANGE_CONCURRENCY`: (Env Var) Max concurrent ranges per blob when using CLI (default: 2).
+- `WALRUS_COALESCE_MAX_RANGE_BYTES_CLI`: (Env Var) Max range size for CLI reads (default: 32MB).
+- `WALRUS_CLI_BACKFILL_STATE_PATH`: (Env Var) Resume state path (default: `backfill_progress.state`).
+- `WALRUS_CLI_BACKFILL_STATE_EVERY`: (Env Var) Write state every N checkpoints (default: 1).
+- `WALRUS_CLI_BACKFILL_RETRY_ATTEMPTS`: (Env Var) Retries per chunk (default: 5).
+- `WALRUS_CLI_BACKFILL_RETRY_DELAY_SECS`: (Env Var) Delay between retries (default: 15).
 
 ### Example (Standard Aggregator)
 
@@ -54,6 +61,39 @@ cargo run --release --bin deepbook-indexer -- \
 > **Note:** The first time a blob is needed, the CLI will download the full 3GB blob to the cache directory (`./checkpoint_cache` by default). Subsequent extractions from the same blob will be extremely fast.
 >
 > **Robustness:** In CLI mode, the downloader parses blob indices directly from the downloaded files. This makes the process fully independent of the Walrus Aggregator's HTTP endpoints once the blobs are cached, protecting against aggregator timeouts or downtime.
+
+---
+
+## Streaming CLI Backfill (Direct Ingest)
+
+For CLI-only ingestion (no aggregator, no local `.chk` files), use:
+
+```bash
+CHECKPOINT_STORAGE=walrus CHECKPOINT_CACHE_ENABLED=false \
+WALRUS_CLI_PATH=/path/to/walrus \
+WALRUS_CLI_CONTEXT=mainnet WALRUS_CLI_SKIP_CONSISTENCY_CHECK=true \
+WALRUS_CLI_TIMEOUT_SECS=300 WALRUS_CLI_BACKFILL_STATE_EVERY=1 \
+cargo run --release --bin deepbook-indexer -- \
+  --env mainnet \
+  --database-url postgres://postgres:postgrespw@localhost:5433/deepbook \
+  --walrus-cli-backfill \
+  --first-checkpoint <START> \
+  --last-checkpoint <END>
+```
+
+**Streaming behavior:** checkpoints are decoded and committed to Postgres as soon as each range is downloaded.
+
+---
+
+## Walrus CLI Fork Requirements
+
+To enable fast CLI size lookups (required for stable CLI streaming), build the forked CLI:
+
+```bash
+cargo build -p walrus-service --bin walrus --features test-utils
+```
+
+**Fork change:** `walrus read --size-only` now uses metadata retrieval with fallback to byte-range read. This avoids slow size lookups on multi-GB blobs.
 
 ### Output
 
@@ -101,4 +141,3 @@ The downloaded checkpoints can be used with any Sui indexer that supports local 
 ```bash
 cargo run --bin sui-indexer -- --local-ingestion-path ./checkpoints ...
 ```
-

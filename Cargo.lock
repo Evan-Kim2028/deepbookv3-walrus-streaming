@@ -10414,6 +10414,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "walrus-streamer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "clap",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sui-storage",
+ "sui-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

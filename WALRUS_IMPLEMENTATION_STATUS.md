@@ -19,6 +19,7 @@
 - ✅ `lib.rs` - Module exports added
 - ✅ `Cargo.toml` - Dependencies added (`reqwest`, `futures`, `sui-storage`)
 - ✅ **Parallel Fetching**: Implemented `buffer_unordered` for concurrent downloads
+- ✅ **CLI Streaming Pipeline**: Added checkpoint-level streaming decode + ingest (no aggregator)
 
 ### ⚠️ Phase 3: Testing & Verification (50% Complete)
 
@@ -26,6 +27,7 @@
 - ✅ **Live Verification**: Successfully backfilled 50 checkpoints (100M+) from Walrus mainnet
 - ✅ **Performance Test**: Achieved 17.51 checkpoints/sec (~57ms per checkpoint)
 - ✅ **Data Integrity**: Verified transaction counts and timestamps match
+- ✅ **CLI Streaming**: Verified checkpoint-by-checkpoint ingest with resume state updates
 
 **Pending**:
 - ⏳ Unit tests for SuiCheckpointStorage
@@ -61,6 +63,53 @@
 - **Sui Bucket**: ~2.1 cp/s (estimated)
 - **Walrus (Sequential)**: 0.34 cp/s
 - **Walrus (Parallel)**: 17.51 cp/s (**8.3x faster than Sui**)
+
+---
+
+## ✅ Updated Architecture (Jan 29, 2026)
+
+### CLI Streaming Pipeline (Checkpoint-Level)
+
+**Goal:** Stream checkpoints as soon as their byte ranges are available, ingesting into Postgres without waiting for full blobs.
+
+**Pipeline:**
+1. **Archival metadata** → resolve blobs covering checkpoint range.
+2. **CLI size lookup** → get precise blob size (fast metadata-based).
+3. **Footer + index read** → locate checkpoint offsets/lengths in the blob.
+4. **Range coalescing** → merge checkpoint ranges into efficient byte reads.
+5. **Range download (CLI)** → `walrus read --start-byte --byte-length`.
+6. **Decode per range** → parse checkpoints immediately.
+7. **Ingest per checkpoint** → handler pipeline commits to Postgres.
+8. **Resume state update** → `backfill_progress.state` advances per checkpoint.
+
+**Streaming Granularity:** *checkpoint-level* (not byte-level).  
+**Data safety:** resume always points to last committed checkpoint.
+
+### Resilience & Resume
+- `backfill_progress.state` written **after each checkpoint**.
+- Automatic retries per chunk; resume picks up from last committed checkpoint.
+
+### CLI Tuning Knobs
+- `WALRUS_CLI_BLOB_CONCURRENCY`
+- `WALRUS_CLI_RANGE_CONCURRENCY`
+- `WALRUS_COALESCE_MAX_RANGE_BYTES_CLI`
+- `WALRUS_CLI_BACKFILL_STATE_PATH`
+- `WALRUS_CLI_BACKFILL_STATE_EVERY`
+- `WALRUS_CLI_BACKFILL_RETRY_ATTEMPTS`
+- `WALRUS_CLI_BACKFILL_RETRY_DELAY_SECS`
+
+---
+
+## Walrus CLI Fork Requirements (Updated)
+
+**Why a fork?**  
+We needed a faster `--size-only` path for blob size retrieval. The upstream CLI fetched size via a byte-range read, which was too slow for large blobs.
+
+**Fork change (required for CLI streaming mode):**
+- `walrus read --size-only` now uses **metadata retrieval** (fast) with a fallback to byte-range read.
+
+**Build:**  
+`cargo build -p walrus-service --bin walrus --features test-utils`
 
 ---
 

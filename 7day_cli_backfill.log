@@ -1,0 +1,64 @@
+   Compiling deepbook-indexer v0.1.0 (/home/evan/Documents/takopi_adventures/projects/deepbookv3/crates/indexer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.16s
+     Running `target/debug/deepbook-indexer --env mainnet --database-url 'postgres://postgres:postgrespw@localhost:5433/deepbook' --walrus-cli-backfill --first-checkpoint 237238939 --last-checkpoint 239631208`
+2026-01-29T18:21:16.036435Z  INFO deepbook_indexer: Starting Walrus CLI-only backfill...
+2026-01-29T18:21:16.169927Z  INFO deepbook_indexer::walrus_storage: fetching Walrus blob metadata from: https://walrus-sui-archival.mainnet.walrus.space
+2026-01-29T18:21:16.444359Z  INFO deepbook_indexer::walrus_storage: fetched 50 Walrus blobs covering checkpoints 238954764..239615933
+2026-01-29T18:21:16.444440Z  WARN deepbook_indexer: start checkpoint 237238939 is before coverage min 238954764; adjusting
+2026-01-29T18:21:16.444450Z  WARN deepbook_indexer: end checkpoint 239631208 is beyond coverage max 239615933; adjusting
+2026-01-29T18:21:16.444612Z  INFO sui_pg_db: Running migrations ...
+2026-01-29T18:21:16.522315Z  INFO sui_pg_db: Migrations complete.
+2026-01-29T18:21:16.597476Z  INFO deepbook_indexer: Walrus CLI backfill chunk size: 100
+2026-01-29T18:21:16.597525Z  INFO deepbook_indexer: Walrus CLI backfill range: 238954764..239615933 (context=mainnet)
+2026-01-29T18:21:46.366415Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:21:43.908469Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:21:43.910093Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:21:43.910152Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:21:43.914214Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 3220874404-3221398692, blob size is 3221275485
+2026-01-29T18:22:15.863950Z  WARN deepbook_indexer::walrus_storage: skipping blob lJIYRNvG_cgmwx_OT8t7gvdr3rTqG_NsSQPF1714qu0 due to index load error: failed to locate footer within index window (guess=3220874404, window_len=524288)
+2026-01-29T18:22:15.864057Z  INFO deepbook_indexer: processed 0 checkpoints (238954764..238954863) in 59.27s (0.00 cp/s, 0.00 MB/s)
+2026-01-29T18:22:15.864086Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 238954864..238966916
+2026-01-29T18:22:24.740156Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:22:22.405298Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:22:22.406962Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:22:22.407020Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:22:22.410841Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 3145684463-3146208751, blob size is 3146147419
+2026-01-29T18:22:33.071799Z  WARN deepbook_indexer::walrus_storage: skipping blob 3_Jb4CiduayiBN_bDXdcReMYFgvSAPsKm0CeALBLc7c due to index load error: failed to locate footer within index window (guess=3145684463, window_len=524288)
+2026-01-29T18:22:33.071880Z  INFO deepbook_indexer: processed 0 checkpoints (238966917..238967016) in 17.21s (0.00 cp/s, 0.01 MB/s)
+2026-01-29T18:22:33.071905Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 238967017..238980944
+2026-01-29T18:22:41.324982Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:22:39.548101Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:22:39.549775Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:22:39.549832Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:22:39.553494Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 2301370375-2301894663, blob size is 2301842505
+2026-01-29T18:22:52.183527Z  WARN deepbook_indexer::walrus_storage: skipping blob t8zoPIfz42IWTUsCqy-wt-0dtFaQ1PFxy4gF1rEzyV4 due to index load error: failed to locate footer within index window (guess=2301370375, window_len=524288)
+2026-01-29T18:22:52.183609Z  INFO deepbook_indexer: processed 0 checkpoints (238980945..238981044) in 19.11s (0.00 cp/s, 0.01 MB/s)
+2026-01-29T18:22:52.183634Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 238981045..238995250
+2026-01-29T18:23:08.313102Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:23:06.669073Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:23:06.670705Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:23:06.670763Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:23:06.674798Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 1371377092-1371901380, blob size is 1371572748
+2026-01-29T18:23:22.742229Z  WARN deepbook_indexer::walrus_storage: skipping blob 6QvRl1qpLIXABLyXOBT_TZRQscpL9XSjyiHeXmZN5XQ due to index load error: failed to locate footer within index window (guess=1371377092, window_len=524288)
+2026-01-29T18:23:22.742318Z  INFO deepbook_indexer: processed 0 checkpoints (238995251..238995350) in 30.56s (0.00 cp/s, 0.01 MB/s)
+2026-01-29T18:23:22.742344Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 238995351..239001178
+2026-01-29T18:23:52.744982Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli timed out after 30s
+2026-01-29T18:23:52.745084Z  WARN deepbook_indexer::walrus_storage: skipping blob aDXFKhX9WYpGihWCyDQ5u1kP_b5KWPCYbG_Q63bHUxs due to index load error: walrus cli timed out after 30s
+2026-01-29T18:23:52.745117Z  INFO deepbook_indexer: processed 0 checkpoints (239001179..239001278) in 30.00s (0.00 cp/s, 0.00 MB/s)
+2026-01-29T18:23:52.745139Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 239001279..239017067
+2026-01-29T18:24:05.326508Z  WARN deepbook_indexer::walrus_storage: skipping blob KW1D2aNLr6eWwibzMaFwMwUF8Ua3V4oZELw-2tBHooI due to index load error: failed to locate footer within index window (guess=2157397195, window_len=525549)
+2026-01-29T18:24:05.326599Z  INFO deepbook_indexer: processed 0 checkpoints (239017068..239017167) in 12.58s (0.00 cp/s, 0.04 MB/s)
+2026-01-29T18:24:05.326627Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 239017168..239032992
+2026-01-29T18:24:23.865107Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:24:21.428481Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:24:21.430113Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:24:21.430172Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:24:21.434232Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 2065945914-2066470202, blob size is 2066438075
+2026-01-29T18:24:39.170590Z  WARN deepbook_indexer::walrus_storage: skipping blob NdQdqjSIX2MSbID_OI4BycV8QKJWRfVVoYJSqfn_nuM due to index load error: failed to locate footer within index window (guess=2065945914, window_len=524288)
+2026-01-29T18:24:39.170679Z  INFO deepbook_indexer: processed 0 checkpoints (239032993..239033092) in 33.84s (0.00 cp/s, 0.01 MB/s)
+2026-01-29T18:24:39.170707Z  WARN deepbook_indexer: skipping bad blob covering checkpoints 239033093..239047905
+2026-01-29T18:25:04.719877Z  WARN deepbook_indexer::walrus_storage: walrus cli range read failed (attempt 1/1): walrus cli failed: \x1b[2m2026-01-29T18:25:02.984621Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus\x1b[0m\x1b[2m:\x1b[0m client version: 1.42.0-4191a5e1d187-dirty
+\x1b[2m2026-01-29T18:25:02.986420Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sdk::config\x1b[0m\x1b[2m:\x1b[0m using Walrus configuration from '/home/evan/.config/walrus/client_config.yaml' with 'mainnet' context
+\x1b[2m2026-01-29T18:25:02.986480Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mwalrus_sui::config\x1b[0m\x1b[2m:\x1b[0m using Sui wallet configuration from '/home/evan/.sui/sui_config/client.yaml'
+\x1b[2m2026-01-29T18:25:02.989836Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrun\x1b[0m\x1b[1m{\x1b[0m\x1b[3mcommand\x1b[0m\x1b[2m=\x1b[0m"read"\x1b[1m}\x1b[0m\x1b[2m:\x1b[0m \x1b[2mwalrus_service::client::cli\x1b[0m\x1b[2m:\x1b[0m using RPC URLs set in client configuration: https://fullnode.mainnet.sui.io:443
+Error: byte range read input error: byte range out of bounds: requested 2374521699-2375045987, blob size is 2374981256
