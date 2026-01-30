@@ -2,6 +2,8 @@ use url::Url;
 
 pub mod checkpoint_storage;
 pub mod checkpoint_storage_config;
+pub mod node_health;
+pub mod sliver_prediction;
 pub mod walrus_storage;
 
 pub mod handlers;
@@ -260,4 +262,6 @@ impl DeepbookEnv {
 // Re-export checkpoint storage types
 pub use checkpoint_storage::{CheckpointStorage, SuiCheckpointStorage};
 pub use checkpoint_storage_config::{CheckpointStorageType, CheckpointStorageConfig};
+pub use node_health::{NodeHealthTracker, NetworkHealthSummary, NodeStatus};
+pub use sliver_prediction::{SliverPredictor, BlobAnalysis, RangeRisk, FetchParams, RangeSplit};
 pub use walrus_storage::WalrusCheckpointStorage;

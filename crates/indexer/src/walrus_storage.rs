@@ -12,7 +12,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 use sui_types::base_types::ObjectID;
@@ -22,6 +22,8 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 
 use super::checkpoint_storage::CheckpointStorage;
+use super::node_health::NodeHealthTracker;
+use super::sliver_prediction::{SliverPredictor, BlobAnalysis, RangeRisk};
 
 /// Walrus blob metadata
 #[derive(Debug, Clone, Deserialize)]
@@ -217,7 +219,9 @@ struct Inner {
     coalesce_max_range_bytes: u64,
     coalesce_max_range_bytes_cli: u64,
     walrus_cli_blob_concurrency: usize,
+    #[allow(dead_code)] // Used to compute healthy concurrency
     walrus_cli_range_concurrency: usize,
+    walrus_cli_range_concurrency_healthy: usize,
     walrus_cli_range_max_retries: usize,
     walrus_cli_range_small_max_retries: usize,
     walrus_cli_range_retry_delay_secs: u64,
@@ -228,10 +232,17 @@ struct Inner {
     bad_blobs: RwLock<HashSet<String>>,
     metadata: RwLock<Vec<BlobMetadata>>,
     bytes_downloaded: AtomicU64,
+    // Node health tracking
+    health_tracker: Option<NodeHealthTracker>,
+    timeout_count: AtomicUsize,
+    last_health_poll_timeout_count: AtomicUsize,
+    // Sliver prediction for adaptive fetching
+    sliver_predictor: RwLock<SliverPredictor>,
 }
 
 impl WalrusCheckpointStorage {
     /// Create a new Walrus checkpoint storage instance
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         archival_url: String,
         aggregator_url: String,
@@ -259,6 +270,21 @@ impl WalrusCheckpointStorage {
             std::fs::create_dir_all(&cache_dir).context("failed to create cache dir for walrus cli")?;
         }
 
+        // Create health tracker if CLI path is available
+        let health_tracker = walrus_cli_path.as_ref().map(|cli_path| {
+            NodeHealthTracker::new(
+                cli_path.clone(),
+                walrus_cli_context.clone(),
+                walrus_cli_timeout_secs,
+                300, // Poll every 5 minutes
+            )
+        });
+
+        // Use range concurrency directly - no multiplier needed
+        // Health data is for diagnostics only, not throttling
+        // Just set --walrus-cli-range-concurrency high (e.g., 96) and let it rip
+        let walrus_cli_range_concurrency_healthy = walrus_cli_range_concurrency;
+
         Ok(Self {
             inner: Arc::new(Inner {
                 archival_url,
@@ -275,6 +301,7 @@ impl WalrusCheckpointStorage {
                 coalesce_max_range_bytes_cli,
                 walrus_cli_blob_concurrency: walrus_cli_blob_concurrency.max(1),
                 walrus_cli_range_concurrency: walrus_cli_range_concurrency.max(1),
+                walrus_cli_range_concurrency_healthy,
                 walrus_cli_range_max_retries: walrus_cli_range_max_retries.max(1),
                 walrus_cli_range_small_max_retries: walrus_cli_range_small_max_retries.max(1),
                 walrus_cli_range_retry_delay_secs,
@@ -288,12 +315,131 @@ impl WalrusCheckpointStorage {
                 bad_blobs: RwLock::new(HashSet::new()),
                 metadata: RwLock::new(Vec::new()),
                 bytes_downloaded: AtomicU64::new(0),
+                health_tracker,
+                timeout_count: AtomicUsize::new(0),
+                last_health_poll_timeout_count: AtomicUsize::new(0),
+                sliver_predictor: RwLock::new(SliverPredictor::new(HashSet::new())),
             }),
         })
     }
 
     pub fn bytes_downloaded(&self) -> u64 {
         self.inner.bytes_downloaded.load(Ordering::Relaxed)
+    }
+
+    /// Get the node health tracker (if available)
+    pub fn health_tracker(&self) -> Option<&NodeHealthTracker> {
+        self.inner.health_tracker.as_ref()
+    }
+
+    /// Poll node health and log summary
+    pub async fn poll_node_health(&self) -> Result<()> {
+        if let Some(tracker) = &self.inner.health_tracker {
+            let summary = tracker.poll_health().await?;
+            tracing::info!(
+                "node health: {} healthy, {} degraded, {} down (of {} total); {} problematic shards of {}",
+                summary.healthy_nodes,
+                summary.degraded_nodes,
+                summary.down_nodes,
+                summary.total_nodes,
+                summary.problematic_shards,
+                summary.total_shards
+            );
+            if !summary.down_node_names.is_empty() {
+                tracing::warn!("DOWN nodes: {}", summary.down_node_names.join(", "));
+            }
+            if !summary.degraded_node_names.is_empty() {
+                tracing::info!("DEGRADED nodes: {}", summary.degraded_node_names.join(", "));
+            }
+            // Update sliver predictor with new problematic shards
+            self.update_sliver_predictor().await;
+        }
+        Ok(())
+    }
+
+    /// Check if health poll is needed based on timeout count
+    /// Triggers a poll if 3+ new timeouts since last poll
+    async fn maybe_poll_health_on_timeout(&self) {
+        let current_timeouts = self.inner.timeout_count.load(Ordering::Relaxed);
+        let last_poll_timeouts = self.inner.last_health_poll_timeout_count.load(Ordering::Relaxed);
+
+        // Poll if 3+ new timeouts since last poll
+        if current_timeouts >= last_poll_timeouts + 3 {
+            if let Some(tracker) = &self.inner.health_tracker {
+                if tracker.needs_poll().await {
+                    tracing::info!("triggering health poll due to {} new timeouts", current_timeouts - last_poll_timeouts);
+                    if let Err(e) = self.poll_node_health().await {
+                        tracing::warn!("failed to poll node health: {}", e);
+                    } else {
+                        // Update sliver predictor after successful health poll
+                        self.update_sliver_predictor().await;
+                    }
+                    self.inner.last_health_poll_timeout_count.store(current_timeouts, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+
+    /// Record a timeout for health tracking
+    fn record_timeout(&self) {
+        self.inner.timeout_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get current timeout count
+    pub fn timeout_count(&self) -> usize {
+        self.inner.timeout_count.load(Ordering::Relaxed)
+    }
+
+    /// Update the sliver predictor with current problematic shards
+    async fn update_sliver_predictor(&self) {
+        if let Some(tracker) = &self.inner.health_tracker {
+            let problematic_shards = tracker.get_problematic_shards().await;
+            let mut predictor = self.inner.sliver_predictor.write().await;
+            predictor.update_shards(problematic_shards);
+        }
+    }
+
+    /// Analyze a blob and get its safe/risky ranges
+    pub async fn analyze_blob(&self, blob_id: &str, blob_size: u64) -> Option<BlobAnalysis> {
+        let predictor = self.inner.sliver_predictor.read().await;
+        predictor.analyze_blob(blob_id, blob_size)
+    }
+
+    /// Get the risk classification for a byte range
+    pub async fn classify_range(&self, blob_id: &str, range: &std::ops::Range<u64>) -> RangeRisk {
+        let predictor = self.inner.sliver_predictor.read().await;
+        predictor.classify_range(blob_id, range)
+    }
+
+
+    /// Log blob analysis summary
+    async fn log_blob_analysis(&self, blob_id: &str, blob_size: u64) {
+        if let Some(analysis) = self.analyze_blob(blob_id, blob_size).await {
+            let safe_count = analysis.safe_ranges.len();
+            let risky_count = analysis.risky_ranges.len();
+            let problematic_primary = analysis.problematic_primary_slivers.len();
+
+            if problematic_primary > 0 {
+                // Log when there are problematic slivers (ranges will be risky)
+                tracing::info!(
+                    "blob {} analysis: {:.1}% safe, {} safe ranges, {} risky ranges, {} problematic primary slivers (rotation={})",
+                    blob_id,
+                    analysis.safe_percentage,
+                    safe_count,
+                    risky_count,
+                    problematic_primary,
+                    analysis.rotation_offset
+                );
+            } else {
+                // Log at debug level when blob is fully safe
+                tracing::debug!(
+                    "blob {} analysis: 100% safe (rotation={})",
+                    blob_id,
+                    analysis.rotation_offset
+                );
+            }
+        }
     }
 
     pub async fn stream_checkpoints<F, Fut>(
@@ -363,13 +509,99 @@ impl WalrusCheckpointStorage {
                 self.inner.coalesce_max_range_bytes
             };
 
+            // Log blob analysis for adaptive fetching (streaming/CLI mode)
+            if self.inner.walrus_cli_path.is_some() && !self.inner.cache_enabled {
+                match self.blob_size_via_cli(&blob.blob_id).await {
+                    Ok(actual_size) => {
+                        self.log_blob_analysis(&blob.blob_id, actual_size).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to get blob size for analysis: {}", e);
+                    }
+                }
+            }
+
             let pending: Vec<(CheckpointSequenceNumber, BlobIndexEntry, ())> = tasks
                 .into_iter()
                 .map(|(cp_num, entry)| (cp_num, entry, ()))
                 .collect();
             let coalesced = coalesce_entries(&pending, max_gap_bytes, max_range_bytes);
 
-            for range in coalesced {
+            // Classify ranges by risk level
+            let mut safe_ranges = Vec::new();
+            let mut risky_ranges = Vec::new();
+
+            if self.inner.walrus_cli_path.is_some() && !self.inner.cache_enabled {
+                let mut safe_count = 0;
+                let mut low_count = 0;
+                let mut high_count = 0;
+                let mut critical_count = 0;
+
+                for coalesced_range in coalesced {
+                    let byte_range = coalesced_range.start..coalesced_range.end;
+                    let risk = self.classify_range(&blob.blob_id, &byte_range).await;
+                    match risk {
+                        RangeRisk::Safe => {
+                            safe_count += 1;
+                            safe_ranges.push(coalesced_range);
+                        }
+                        RangeRisk::Low => {
+                            low_count += 1;
+                            safe_ranges.push(coalesced_range);
+                        }
+                        RangeRisk::High => {
+                            high_count += 1;
+                            risky_ranges.push(coalesced_range);
+                        }
+                        RangeRisk::Critical => {
+                            critical_count += 1;
+                            risky_ranges.push(coalesced_range);
+                        }
+                    }
+                }
+
+                // Log range classification summary
+                if low_count > 0 || high_count > 0 || critical_count > 0 {
+                    tracing::info!(
+                        "stream range classification for blob {}: {} safe, {} low, {} high, {} critical",
+                        blob.blob_id,
+                        safe_count,
+                        low_count,
+                        high_count,
+                        critical_count
+                    );
+                }
+            } else {
+                safe_ranges = coalesced;
+            }
+
+            // Process safe ranges first (aggressive fetching)
+            for range in safe_ranges {
+                if range.len() == 0 {
+                    continue;
+                }
+
+                let bytes = self
+                    .download_range(&blob.blob_id, range.start, range.len())
+                    .await?;
+
+                let mut entries = range.entries;
+                entries.sort_by_key(|(cp_num, _, _)| *cp_num);
+
+                for (cp_num, entry, _) in entries {
+                    let start = entry.offset.saturating_sub(range.start) as usize;
+                    let end = start + entry.length as usize;
+                    let checkpoint = sui_storage::blob::Blob::from_bytes::<CheckpointData>(
+                        &bytes[start..end],
+                    )
+                    .with_context(|| format!("failed to deserialize checkpoint {}", cp_num))?;
+                    on_checkpoint(checkpoint).await?;
+                    total_processed += 1;
+                }
+            }
+
+            // Process risky ranges (with more caution)
+            for range in risky_ranges {
                 if range.len() == 0 {
                     continue;
                 }
@@ -479,6 +711,31 @@ impl WalrusCheckpointStorage {
             min_start,
             max_end
         );
+
+        // Poll node health at startup
+        if let Some(tracker) = &self.inner.health_tracker {
+            match tracker.poll_health().await {
+                Ok(summary) => {
+                    tracing::info!(
+                        "initial node health: {} healthy, {} degraded, {} down (of {} total); {} problematic shards",
+                        summary.healthy_nodes,
+                        summary.degraded_nodes,
+                        summary.down_nodes,
+                        summary.total_nodes,
+                        summary.problematic_shards
+                    );
+                    if !summary.down_node_names.is_empty() {
+                        tracing::warn!("DOWN nodes at startup: {}", summary.down_node_names.join(", "));
+                    }
+                    // Initialize sliver predictor with problematic shards
+                    self.update_sliver_predictor().await;
+                    tracing::info!("sliver predictor initialized with {} problematic shards", summary.problematic_shards);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to poll initial node health: {}", e);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -944,19 +1201,27 @@ impl WalrusCheckpointStorage {
                         break;
                     }
                     Err(e) => {
+                        // Check if this was a timeout
+                        let is_timeout = e.to_string().contains("timed out");
+                        if is_timeout {
+                            self.record_timeout();
+                            // Check if we should poll health
+                            self.maybe_poll_health_on_timeout().await;
+                        }
+
                         tracing::warn!(
-                        "walrus cli range read failed (attempt {}/{}): {}",
-                        attempt,
-                        max_retries,
-                        e
-                    );
-                    last_err = Some(e);
-                    if attempt < max_retries {
-                        let delay = retry_delay_secs.saturating_mul(attempt as u64).max(1);
-                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                            "walrus cli range read failed (attempt {}/{}): {}",
+                            attempt,
+                            max_retries,
+                            e
+                        );
+                        last_err = Some(e);
+                        if attempt < max_retries {
+                            let delay = retry_delay_secs.saturating_mul(attempt as u64).max(1);
+                            tokio::time::sleep(Duration::from_secs(delay)).await;
+                        }
                     }
                 }
-            }
             }
 
             if let Some(bytes) = success {
@@ -989,9 +1254,6 @@ impl WalrusCheckpointStorage {
     }
 
     async fn blob_size_via_cli(&self, blob_id: &str) -> Result<u64> {
-        let cli_path = self.inner.walrus_cli_path.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Walrus CLI path not configured"))?;
-
         // Check cache first
         {
             let cache = self.inner.blob_size_cache.read().await;
@@ -999,6 +1261,10 @@ impl WalrusCheckpointStorage {
                 return Ok(*size);
             }
         }
+
+        // Use CLI --size-only to get actual blob size
+        let cli_path = self.inner.walrus_cli_path.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Walrus CLI path not configured"))?;
 
         let mut stdout = String::new();
         let mut last_err: Option<anyhow::Error> = None;
@@ -1211,7 +1477,7 @@ impl WalrusCheckpointStorage {
         // Process blobs in parallel
         // If using CLI, we can handle multiple heavy downloads.
         // If using Aggregator, we process blobs one-by-one (chunking) to avoid timeouts.
-        let blob_concurrency = if self.inner.walrus_cli_path.is_some() { 3 } else { 1 };
+        let blob_concurrency = if self.inner.walrus_cli_path.is_some() { 4 } else { 1 };
         
         let mut blob_stream = stream::iter(blobs)
             .map(|blob| {
@@ -1356,7 +1622,7 @@ impl WalrusCheckpointStorage {
         }
 
         let hits = Arc::new(RwLock::new(Vec::new()));
-        let blob_concurrency = if self.inner.walrus_cli_path.is_some() { 3 } else { 1 };
+        let blob_concurrency = if self.inner.walrus_cli_path.is_some() { 4 } else { 1 };
 
         let mut blob_stream = stream::iter(blobs)
             .map(|blob| {
@@ -1541,6 +1807,16 @@ impl CheckpointStorage for WalrusCheckpointStorage {
                 let checkpoints = checkpoints.clone();
                 
                 async move {
+                    // Refresh node health when starting a new blob
+                    // This ensures we have up-to-date shard status for classification
+                    if storage.inner.walrus_cli_path.is_some() && !storage.inner.cache_enabled {
+                        if let Err(e) = storage.poll_node_health().await {
+                            tracing::debug!("failed to refresh node health for blob {}: {}", blob.blob_id, e);
+                        } else {
+                            storage.update_sliver_predictor().await;
+                        }
+                    }
+
                     // If using CLI, ensure blob is downloaded ONCE before parsing index
                     if storage.inner.walrus_cli_path.is_some() && storage.inner.cache_enabled {
                         storage.download_blob_via_cli(&blob.blob_id).await?;
@@ -1575,6 +1851,20 @@ impl CheckpointStorage for WalrusCheckpointStorage {
 
                     tracing::debug!("downloading {} checkpoints from blob {}", tasks.len(), blob.blob_id);
 
+                    // Log blob analysis for adaptive fetching (only in streaming/CLI mode)
+                    // Use CLI-reported size which is accurate, not archival metadata total_size
+                    // (archival metadata total_size is actually the index start offset)
+                    if storage.inner.walrus_cli_path.is_some() && !storage.inner.cache_enabled {
+                        match storage.blob_size_via_cli(&blob.blob_id).await {
+                            Ok(actual_size) => {
+                                storage.log_blob_analysis(&blob.blob_id, actual_size).await;
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to get blob size for analysis: {}", e);
+                            }
+                        }
+                    }
+
                     // Process in chunks for Aggregator
                     let chunk_size = if storage.inner.walrus_cli_path.is_some() { tasks.len() } else { 200 };
                     let mut results = Vec::new();
@@ -1591,8 +1881,40 @@ impl CheckpointStorage for WalrusCheckpointStorage {
                             chunk.iter().cloned().map(|(cp_num, entry)| (cp_num, entry, ())).collect();
 
                         let coalesced = coalesce_entries(&pending, max_gap_bytes, max_range_bytes);
+
+                        // Log range classification for diagnostics (but don't separate processing)
+                        if storage.inner.walrus_cli_path.is_some() && !storage.inner.cache_enabled {
+                            let mut safe_count = 0;
+                            let mut low_count = 0;
+                            let mut high_count = 0;
+                            let mut critical_count = 0;
+
+                            for coalesced_range in &coalesced {
+                                let byte_range = coalesced_range.start..coalesced_range.end;
+                                let risk = storage.classify_range(&blob.blob_id, &byte_range).await;
+                                match risk {
+                                    RangeRisk::Safe => safe_count += 1,
+                                    RangeRisk::Low => low_count += 1,
+                                    RangeRisk::High => high_count += 1,
+                                    RangeRisk::Critical => critical_count += 1,
+                                }
+                            }
+
+                            tracing::info!(
+                                "stream range classification for blob {}: {} safe, {} low, {} high, {} critical",
+                                blob.blob_id,
+                                safe_count,
+                                low_count,
+                                high_count,
+                                critical_count
+                            );
+                        }
+
+                        // Use single aggressive concurrency for ALL ranges
+                        // Concurrency doesn't affect individual range speed - unhealthy slivers are slow regardless
+                        // So we just push hard on everything and let the network sort it out
                         let range_concurrency = if storage.inner.walrus_cli_path.is_some() {
-                            storage.inner.walrus_cli_range_concurrency
+                            storage.inner.walrus_cli_range_concurrency_healthy
                         } else {
                             1
                         };
